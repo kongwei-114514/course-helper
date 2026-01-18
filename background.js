@@ -4,14 +4,16 @@ console.log("Course Helper background loaded (stable refresh version)");
 // 自动刷新状态（唯一可信来源，跨页面、跨 reload）
 // =======================================================
 let autoRefreshEnabled = true;
-let autoRefreshIntervalMs = 10000;
+let autoRefreshIntervalMs = 500000;
+// 本次登录是否由插件发起
+let pluginInitiatedLogin = false;
 
 // =======================================================
 // 点击插件图标：直接访问选课入口（你已验证可用）
 // =======================================================
 chrome.action.onClicked.addListener(() => {
   console.log("Course Helper: icon clicked");
-
+  pluginInitiatedLogin = true;
   chrome.tabs.create({
     url: "http://zhjwxk.cic.tsinghua.edu.cn/xklogin.do",
   });
@@ -48,13 +50,21 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
   // ---------- 登录按钮已触发 ----------
   if (msg.type === "loginTriggered" && sender.tab) {
+    if (!pluginInitiatedLogin) {
+      console.log(
+        "Course Helper: login triggered but NOT initiated by plugin, skip redirect"
+      );
+      return;
+    }
+
     pendingRedirectTabId = sender.tab.id;
     console.log(
-      "Course Helper: login triggered in tab",
+      "Course Helper: plugin-initiated login triggered in tab",
       pendingRedirectTabId
     );
     return;
   }
+
 
   // ---------- 开启自动刷新 ----------
   if (msg.type === "START_AUTO_REFRESH") {
@@ -108,6 +118,10 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
     url: "http://zhjwxk.cic.tsinghua.edu.cn/xklogin.do",
   });
 
+  // 清空插件登录意图（只生效一次）
+  pluginInitiatedLogin = false;
+
   // 只跳一次
   pendingRedirectTabId = null;
+
 });

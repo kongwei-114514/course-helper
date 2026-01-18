@@ -127,18 +127,23 @@ const timer = setInterval(() => {
 }, 500);
 
 // ====== 判断是否在选课系统页面（WebVPN 内） ======
-if (
-  location.hostname === "webvpn.tsinghua.edu.cn" &&
-  location.pathname.includes("xk")
-) {
-  console.log("Course Helper: in course system (webvpn)");
+const isCourseSystem =
+  location.pathname.includes("xkBks") ||
+  location.pathname.includes("xklogin") ||
+  location.pathname.includes("xk");
 
-  // 页面加载完成后，询问是否需要继续刷新
+if (isCourseSystem) {
+  console.log("Course Helper: in course system page");
+
   chrome.runtime.sendMessage(
     { type: "CHECK_AUTO_REFRESH" },
     (res) => {
       if (res && res.enabled) {
-        console.log("Course Helper: scheduling next refresh");
+        console.log(
+          "Course Helper: scheduling next refresh in",
+          res.intervalMs,
+          "ms"
+        );
 
         setTimeout(() => {
           location.reload();
@@ -147,6 +152,7 @@ if (
     }
   );
 }
+
 
 
 // ====== 手动启动 / 停止自动刷新 ======

@@ -1,0 +1,23 @@
+{
+  "manifest_version": 3,
+  "name": "Course Helper",
+  "version": "0.1.0",
+  "description": "Tsinghua course helper",
+  "permissions": ["tabs", "storage", "scripting"],
+  "host_permissions": ["https://*/*"],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://id.tsinghua.edu.cn/*",
+        "https://webvpn.tsinghua.edu.cn/*"
+      ],
+      "js": ["content.js"]
+    }
+  ],
+  "action": {
+    "default_title": "Course Helper"
+  }
+}

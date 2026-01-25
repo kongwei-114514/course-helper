@@ -21,7 +21,12 @@
       ],
       "js": [
         "scripts/fetcher.js",
-        "content.js"
+        "content.js",
+        "scripts/analyser.js",
+        "scripts/exporter.js",
+        "scripts/parser.js",
+        "scripts/training-plan-main.js",
+        "scripts/test.js"
       ]
     }
   ],

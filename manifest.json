@@ -3,8 +3,11 @@
   "name": "Course Helper",
   "version": "0.1.0",
   "description": "Tsinghua course helper",
-  "permissions": ["tabs", "storage", "scripting"],
-  "host_permissions": ["https://*/*"],
+  "permissions": ["tabs", "storage", "scripting", "cookies"],
+  "host_permissions": [
+    "https://*/*",
+    "http://*/*"
+  ],
   "background": {
     "service_worker": "background.js"
   },
@@ -13,9 +16,13 @@
       "matches": [
         "https://id.tsinghua.edu.cn/*",
         "https://webvpn.tsinghua.edu.cn/*",
-        "http://zhjwxk.cic.tsinghua.edu.cn/*"
+        "http://zhjwxk.cic.tsinghua.edu.cn/*",
+        "https://learn.tsinghua.edu.cn/*"
       ],
-      "js": ["content.js"]
+      "js": [
+        "scripts/fetcher.js",
+        "content.js"
+      ]
     }
   ],
   "action": {

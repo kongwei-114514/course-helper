@@ -3,13 +3,14 @@
   "name": "Course Helper",
   "version": "0.1.0",
   "description": "Tsinghua course helper",
-  "permissions": ["tabs", "storage", "scripting", "cookies"],
+  "permissions": ["tabs", "storage", "scripting", "cookies", "downloads"],
   "host_permissions": [
     "https://*/*",
     "http://*/*"
   ],
   "background": {
-    "service_worker": "background.js"
+    "service_worker": "background.js",
+    "type": "module"
   },
   "content_scripts": [
     {
@@ -27,6 +28,15 @@
         "scripts/parser.js",
         "scripts/training-plan-main.js",
         "scripts/test.js"
+      ]
+    },
+    {
+      "matches": [
+        "https://yourschool.cc/*"
+      ],
+      "js": [
+        "scripts/course-crawler.js",
+        "scripts/course-crawler-ui.js"
       ]
     }
   ],

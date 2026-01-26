@@ -182,17 +182,44 @@ class TrainingPlanParser {
       if (cellCursor + 4 < cells.length) {
           const courseId = this.cleanText(cells[cellCursor].textContent);
           const courseName = this.cleanText(cells[cellCursor + 1].textContent);
-          
+          const grade = this.cleanText(cells[cellCursor + 3].textContent);
           // 简单验证：课程号通常是数字或字母组合，长度较短
           if (courseId && courseName) {
+              // 判断课程状态
+              let status = 'unknown'; // 默认未知
+              let isOutOfPlan = false;
+
+              if (grade.includes('未修')) {
+                  status = 'not_taken';
+              } else if (grade.includes('选课')) {
+                  status = 'completed';
+              } else if (grade === 'W') {
+                  status = 'withdrawn';
+              } else if (grade === 'F') {
+                  status = 'failed';
+              } else if (grade === 'P' || grade.match(/^[A-D][+-]?$/)) {
+                  // P(通过) 或 A/B/C/D 字母成绩 → 已完成
+                  status = 'completed';
+              } else if (grade && grade.trim() !== '') {
+                  // 其他非空成绩（如数字成绩）也算完成
+                  status = 'completed';
+              }
+
+              // 检查是否为蓝色字体（方案外课程）
+              const nameCell = cells[cellCursor + 1];
+              if (nameCell && nameCell.querySelector('font[color="#0000FF"]')) {
+                  isOutOfPlan = true;
+              }
               const course = {
                   courseId: courseId,
                   courseName: courseName,
                   credits: parseFloat(this.cleanText(cells[cellCursor + 2].textContent)) || 0,
-                  grade: this.cleanText(cells[cellCursor + 3].textContent),
-                  gpa: parseFloat(this.cleanText(cells[cellCursor + 4].textContent)) || 0
+                  grade: grade,
+                  gpa: parseFloat(this.cleanText(cells[cellCursor + 4].textContent)) || 0,
+                  status: status,           // ← 加上这行
+                  isOutOfPlan: isOutOfPlan  // ← 加上这行
               };
-              
+
               if (currentGroup) {
                   currentGroup.courses.push(course);
               }

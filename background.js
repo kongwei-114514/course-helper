@@ -1,5 +1,4 @@
 console.log("Course Helper background loaded (stable refresh version)");
-
 // =======================================================
 // 自动刷新状态（唯一可信来源，跨页面、跨 reload）
 // =======================================================
@@ -105,6 +104,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     fetchTrainingPlanHTML().then(sendResponse);
     return true;
   }
+
 });
 
 // =======================================================

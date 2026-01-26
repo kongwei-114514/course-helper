@@ -232,6 +232,37 @@ class TrainingPlanParser {
       type.type=typenames[type_count];
       type_count++;
     }
+    // ===== 重新统计课组完成学分 =====
+    for (const type of result.courseTypes) {
+      for (const group of type.groups) {
+        let completedCredits = 0;
+        let completedCourses = 0;
+
+        for (const course of group.courses) {
+          // 如果 status 是 completed，就算作已完成
+          if (course.status === 'completed') {
+            completedCredits += course.credits;
+            completedCourses += 1;
+          }
+        }
+
+        // 更新 group.stats
+        if (group.stats) {
+          group.stats.completedCredits = completedCredits;
+          group.stats.completedCourses = completedCourses;
+          group.stats.isCompleted = (completedCredits >= group.stats.requiredCredits);
+        } else {
+          group.stats = {
+            requiredCredits: 0,
+            completedCredits,
+            requiredCourses: group.courses.length,
+            completedCourses,
+            isCompleted: completedCredits >= 0
+          };
+        }
+      }
+    }
+
     return result;
   }
 

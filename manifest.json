@@ -1,9 +1,9 @@
 {
   "manifest_version": 3,
   "name": "Course Helper",
-  "version": "0.1.0",
-  "description": "Tsinghua course helper",
-  "permissions": ["tabs", "storage", "scripting", "cookies", "downloads"],
+  "version": "0.2.0",
+  "description": "清华选课助手 - 培养方案管理与选课评价",
+  "permissions": ["tabs", "storage", "scripting", "cookies"],
   "host_permissions": [
     "https://*/*",
     "http://*/*"
@@ -21,26 +21,20 @@
         "https://learn.tsinghua.edu.cn/*"
       ],
       "js": [
-        "scripts/fetcher.js",
-        "content.js",
-        "scripts/analyser.js",
-        "scripts/exporter.js",
-        "scripts/parser.js",
-        "scripts/training-plan-main.js",
-        "scripts/test.js"
-      ]
-    },
-    {
-      "matches": [
-        "https://yourschool.cc/*"
-      ],
-      "js": [
-        "scripts/course-crawler.js",
-        "scripts/course-crawler-ui.js"
+        "content.js"
       ]
     }
   ],
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "scripts/*.js",
+        "dashboard.html"
+      ],
+      "matches": ["<all_urls>"]
+    }
+  ],
   "action": {
-    "default_title": "Course Helper"
+    "default_title": "Course Helper - 清华选课助手"
   }
 }

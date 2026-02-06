@@ -14,8 +14,18 @@ function serializeForm() {
   return data;
 }
 
-// ========== 插入“记住登录信息”复选框 ==========
+// ========== 插入"记住登录信息"复选框 ==========
 function tryInsertCheckbox() {
+  // ✨ 修复问题1：只在WebVPN的选课系统登录页面注入复选框
+  // 排除网络学堂等其他页面
+  const isWebVPNLoginPage = location.href.includes('webvpn.tsinghua.edu.cn') || 
+                            location.href.includes('zhjwxk.cic.tsinghua.edu.cn/xklogin');
+  
+  if (!isWebVPNLoginPage) {
+    console.log("Course Helper: not WebVPN login page, skip checkbox insertion");
+    return;
+  }
+
   const btn = document.querySelector("a.btn");
   if (!btn) return;
 
@@ -33,7 +43,7 @@ function tryInsertCheckbox() {
   `;
 
   btn.parentElement.insertBefore(wrapper, btn);
-  console.log("Course Helper: checkbox inserted");
+  console.log("Course Helper: checkbox inserted on WebVPN login page");
 }
 
 // ========== Hook 登录按钮，用于保存登录信息 ==========
@@ -184,4 +194,3 @@ chrome.runtime.onMessage.addListener((msg) => {
     location.reload();
   }
 });
-

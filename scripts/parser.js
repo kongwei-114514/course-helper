@@ -21,14 +21,18 @@ class TrainingPlanParser {
     
     // 移除 vpn_eval((...)); 这种乱码
     if (cleaned.includes('vpn_eval')) {
-      // 通常真正的文本在最后，例如 "...);政治理论课(信)"
-      // 我们尝试取最后一个分号后的内容，或者利用中文特征提取
       const parts = cleaned.split(');');
       if (parts.length > 1) {
         cleaned = parts[parts.length - 1];
       }
-      // 再次清理可能的剩余符号
       cleaned = cleaned.replace(/[";)]/g, '').trim();
+    }
+
+    // 移除 truncdata("...", 数字) 这种乱码，真正的文本在括号后面
+    // 格式: truncdata("课组名", 数字)课组名  → 取最后的数字)之后的内容
+    if (cleaned.includes('truncdata')) {
+      const m = cleaned.match(/truncdata\(.*?,\s*\d+\)([\s\S]*)/);
+      if (m) cleaned = m[1].trim();
     }
     
     return cleaned;

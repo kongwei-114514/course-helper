@@ -435,6 +435,12 @@
       <button class="btn btn-outline" id="refreshReviews">
         📊 更新选课评价
       </button>
+      <button class="btn btn-outline" id="fetchNextSemester">
+        📋 下学期推荐课
+      </button>
+      <button class="btn btn-outline" id="fetchCourseSchedule">
+        🗓️ 抓取开课信息
+      </button>
       <button class="btn btn-primary" id="exportData">
         📥 导出数据
       </button>
@@ -517,8 +523,19 @@
     </div>
   </div>
 
+
+  <!-- 进度 Toast -->
+  <div id="progressToast" style="display:none;position:fixed;bottom:24px;right:24px;background:#fff;border:1px solid #ddd;border-radius:12px;padding:16px 20px;min-width:280px;box-shadow:0 4px 20px rgba(0,0,0,0.15);z-index:9999;">
+    <div id="progressToastTitle" style="font-weight:600;margin-bottom:8px;"></div>
+    <div style="background:#f0f0f0;border-radius:4px;height:6px;margin-bottom:8px;">
+      <div id="progressToastBar" style="background:#4f46e5;height:6px;border-radius:4px;width:0%;transition:width 0.3s;"></div>
+    </div>
+    <div id="progressToastText" style="font-size:0.85rem;color:#666;"></div>
+  </div>
   <script src="scripts/parser.js"></script>
   <script src="scripts/analyser.js"></script>
+  <script src="scripts/exporter.js"></script>
   <script src="scripts/dashboard.js"></script>
+  <script src="scripts/fetcher-ui.js"></script>
 </body>
 </html>

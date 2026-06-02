@@ -42,11 +42,12 @@
       display: flex;
       justify-content: space-between;
       align-items: center;
+      gap: 1rem;
       position: sticky;
       top: 0;
       z-index: 200;
     }
-    .navbar-left { display: flex; align-items: center; gap: 1.5rem; }
+    .navbar-left { display: flex; align-items: center; gap: 1.5rem; min-width: 0; }
     .navbar-brand { font-size: 1.5rem; font-weight: bold; color: var(--primary); }
     .page-tabs { display: flex; gap: 0.3rem; }
     .page-tab {
@@ -58,7 +59,29 @@
     .page-tab:hover { border-color: var(--primary); color: var(--primary); }
     .page-tab.active { background: var(--primary); color: white; border-color: var(--primary); }
 
-    .navbar-actions { display: flex; gap: 0.75rem; flex-wrap: wrap; }
+    .navbar-actions { display: flex; align-items: center; gap: 0.75rem; margin-left: auto; flex: 0 0 auto; }
+    .semester-controls { display: flex; align-items: center; gap: 0.45rem; padding: 0.25rem 0.45rem; border: 1px solid var(--border); border-radius: 6px; background: #fff; }
+    .semester-label { color: var(--text-light); font-size: 0.85rem; white-space: nowrap; }
+    .semester-select { border: 1px solid var(--border); border-radius: 4px; padding: 0.38rem 0.55rem; font-size: 0.86rem; color: var(--text); background: #fff; outline: none; }
+    .semester-mini-btn { border: 1px solid var(--primary); border-radius: 4px; padding: 0.38rem 0.55rem; color: var(--primary); background: transparent; cursor: pointer; font-size: 0.82rem; font-family: inherit; }
+    .semester-mini-btn:hover { background: var(--primary-light); }
+    .semester-mini-btn:disabled, .semester-select:disabled { opacity: 0.5; cursor: not-allowed; }
+    .action-menu { position: relative; }
+    .action-menu-toggle { list-style: none; user-select: none; }
+    .action-menu-toggle::-webkit-details-marker { display: none; }
+    .action-menu-panel {
+      display: none; position: absolute; top: calc(100% + 0.55rem); right: 0;
+      min-width: 230px; padding: 0.6rem; border: 1px solid var(--border);
+      border-radius: 8px; background: var(--card-bg); box-shadow: 0 8px 24px rgba(0,0,0,0.16);
+      z-index: 300; gap: 0.45rem;
+    }
+    .action-menu[open] .action-menu-panel { display: grid; }
+    .action-menu-panel .btn { width: 100%; justify-content: flex-start; white-space: nowrap; }
+    @media (max-width: 900px) {
+      .navbar { align-items: flex-start; }
+      .navbar-left { flex-wrap: wrap; }
+      .navbar-actions { flex-wrap: wrap; justify-content: flex-end; }
+    }
     .btn {
       padding: 0.6rem 1.2rem; border: none; border-radius: 6px; cursor: pointer;
       font-size: 0.9rem; transition: all 0.3s; display: flex; align-items: center; gap: 0.5rem;
@@ -337,13 +360,23 @@
       </div>
     </div>
     <div class="navbar-actions">
-      <button class="btn btn-outline" id="xuankeshequ">↗️ 进入选课社区贡献评价</button>
-      <button class="btn btn-outline" id="refreshTrainingPlan">🔄 更新培养方案</button>
-      <button class="btn btn-outline" id="refreshReviews">📊 更新选课评价</button>
-      <button class="btn btn-outline" id="fetchNextSemester">📋 下学期推荐课</button>
-      <button class="btn btn-outline" id="fetchCourseSchedule">🗓️ 抓取开课信息</button>
-      <button class="btn btn-outline" id="fetchEnrollmentStats">📈 刷新选课人数</button>
-      <button class="btn btn-primary" id="exportData">📥 导出数据</button>
+      <div class="semester-controls">
+        <span class="semester-label">学期</span>
+        <select class="semester-select" id="xnxqSelect"><option value="">加载中...</option></select>
+        <button class="semester-mini-btn" id="scanXnxq">扫描</button>
+      </div>
+      <details class="action-menu" id="actionMenu">
+        <summary class="btn btn-outline action-menu-toggle">操作</summary>
+        <div class="action-menu-panel">
+          <button class="btn btn-outline" id="xuankeshequ">↗️ 进入选课社区贡献评价</button>
+          <button class="btn btn-outline" id="refreshTrainingPlan">🔄 更新培养方案</button>
+          <button class="btn btn-outline" id="refreshReviews">📊 更新选课评价</button>
+          <button class="btn btn-outline" id="fetchNextSemester">📋 抓取推荐课单</button>
+          <button class="btn btn-outline" id="fetchCourseSchedule">🗓️ 抓取开课信息</button>
+          <button class="btn btn-outline" id="fetchEnrollmentStats">📈 刷新选课人数</button>
+          <button class="btn btn-outline" id="exportData">📥 导出数据</button>
+        </div>
+      </details>
     </div>
   </nav>
 

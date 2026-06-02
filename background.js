@@ -60,17 +60,22 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   }
 
   if (msg.type === "FETCH_NEXT_SEMESTER_COURSES") {
-    fetchNextSemesterCourses().then(sendResponse);
+    fetchNextSemesterCourses(msg.xnxq).then(sendResponse);
     return true;
   }
 
   if (msg.type === "FETCH_ALL_COURSE_SCHEDULE") {
-    fetchAllCourseSchedule(sender.tab?.id, msg.progressTabId).then(sendResponse);
+    fetchAllCourseSchedule(sender.tab?.id, msg.progressTabId, msg.xnxq).then(sendResponse);
     return true;
   }
 
   if (msg.type === "FETCH_ENROLLMENT_STATS") {
-    fetchEnrollmentStats(sender.tab?.id).then(sendResponse);
+    fetchEnrollmentStats(sender.tab?.id, msg.xnxq).then(sendResponse);
+    return true;
+  }
+
+  if (msg.type === "DISCOVER_AVAILABLE_XNXQS") {
+    discoverAvailableXnxqs(sender.tab?.id).then(sendResponse);
     return true;
   }
 
@@ -253,15 +258,27 @@ async function fetchTrainingPlanHTML() {
 // =======================================================
 // 工具：在指定 tab 等待页面加载完成后执行脚本
 // =======================================================
-function waitForTabComplete(tabId) {
+function waitForTabComplete(tabId, timeoutMs = 20000) {
   return new Promise(resolve => {
-    const listener = (tid, info) => {
-      if (tid !== tabId || info.status !== "complete") return;
+    let settled = false;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
       chrome.tabs.onUpdated.removeListener(listener);
+      clearTimeout(timeout);
       // 多等 300ms 让 JS 渲染完成
       setTimeout(resolve, 300);
     };
+    const listener = (tid, info) => {
+      if (tid !== tabId || info.status !== "complete") return;
+      finish();
+    };
+    const timeout = setTimeout(finish, timeoutMs);
     chrome.tabs.onUpdated.addListener(listener);
+    chrome.tabs.get(tabId, tab => {
+      if (chrome.runtime.lastError) return;
+      if (tab?.status === "complete") finish();
+    });
   });
 }
 
@@ -358,6 +375,48 @@ function pickLatestXnxq(values) {
     .pop() || "";
 }
 
+function uniqueSortedXnxqs(values) {
+  return Array.from(new Set(values.map(normalizeXnxq).filter(Boolean))).sort(compareXnxq);
+}
+
+function nextXnxq(xnxq) {
+  const normalized = normalizeXnxq(xnxq);
+  if (!normalized) return "";
+  const [startText, endText, termText] = normalized.split("-");
+  let start = parseInt(startText, 10);
+  let end = parseInt(endText, 10);
+  let term = parseInt(termText, 10);
+  if (term < 3) return `${start}-${end}-${term + 1}`;
+  start += 1;
+  end += 1;
+  return `${start}-${end}-1`;
+}
+
+function prevXnxq(xnxq) {
+  const normalized = normalizeXnxq(xnxq);
+  if (!normalized) return "";
+  const [startText, endText, termText] = normalized.split("-");
+  let start = parseInt(startText, 10);
+  let end = parseInt(endText, 10);
+  let term = parseInt(termText, 10);
+  if (term > 1) return `${start}-${end}-${term - 1}`;
+  start -= 1;
+  end -= 1;
+  return `${start}-${end}-3`;
+}
+
+function shiftXnxq(xnxq, steps) {
+  let current = normalizeXnxq(xnxq);
+  if (!current) return "";
+  const move = steps >= 0 ? nextXnxq : prevXnxq;
+  for (let i = 0; i < Math.abs(steps); i++) current = move(current);
+  return current;
+}
+
+function inferProbeStartXnxq(date = new Date()) {
+  return shiftXnxq(inferNextXnxqFromDate(date), -3);
+}
+
 function getXnxqFromUrl(url) {
   try {
     return normalizeXnxq(new URL(url).searchParams.get("p_xnxq"));
@@ -368,11 +427,25 @@ function getXnxqFromUrl(url) {
 
 function getStoredXnxq() {
   return new Promise(resolve => {
-    chrome.storage.local.get(["latestXnxq", "courseScheduleData", "nextSemesterData"], result => {
+    chrome.storage.local.get([
+      "latestXnxq",
+      "activeXnxq",
+      "availableXnxqs",
+      "courseScheduleData",
+      "nextSemesterData",
+      "courseScheduleDataByXnxq",
+      "nextSemesterDataByXnxq",
+      "enrollmentStatsDataByXnxq"
+    ], result => {
       resolve(pickLatestXnxq([
         result.latestXnxq,
+        result.activeXnxq,
         result.courseScheduleData?.xnxq,
         result.nextSemesterData?.xnxq,
+        ...(result.availableXnxqs || []),
+        ...Object.keys(result.courseScheduleDataByXnxq || {}),
+        ...Object.keys(result.nextSemesterDataByXnxq || {}),
+        ...Object.keys(result.enrollmentStatsDataByXnxq || {}),
       ]));
     });
   });
@@ -387,6 +460,12 @@ function storeLatestXnxq(xnxq, source) {
       latestXnxqSource: source || "unknown",
       latestXnxqUpdatedAt: new Date().toISOString(),
     }, resolve);
+  });
+}
+
+function getActiveXnxq() {
+  return new Promise(resolve => {
+    chrome.storage.local.get(["activeXnxq"], result => resolve(normalizeXnxq(result.activeXnxq)));
   });
 }
 
@@ -443,13 +522,336 @@ async function getLatestXnxq(preferredTabId) {
   return latestXnxq;
 }
 
+async function getXkTab(preferredTabId, preferredXnxq) {
+  const tabs = await chrome.tabs.query({});
+  const normalizedXnxq = normalizeXnxq(preferredXnxq);
+  const isXkTab = t => (t.url || "").includes("zhjwxk.cic.tsinghua.edu.cn") && !(t.url || "").includes("xklogin.do");
+  const matchesXnxq = t => normalizedXnxq && getXnxqFromUrl(t.url || "") === normalizedXnxq;
+  return tabs.find(t => t.id === preferredTabId && isXkTab(t) && (!normalizedXnxq || matchesXnxq(t)))
+    || tabs.find(t => isXkTab(t) && matchesXnxq(t))
+    || tabs.find(t => t.id === preferredTabId && isXkTab(t))
+    || tabs.find(t => (t.url || "").includes("zhjwxk.cic.tsinghua.edu.cn") && !(t.url || "").includes("xklogin.do"))
+    || null;
+}
+
+async function ensureXkTabXnxq(tabId, xnxq) {
+  const normalized = normalizeXnxq(xnxq);
+  if (!tabId || !normalized) return { ok: false, error: "缺少选课系统标签页或学期" };
+
+  const url = `http://zhjwxk.cic.tsinghua.edu.cn/xkBks.vxkBksXkbBs.do?m=main&p_xnxq=${encodeURIComponent(normalized)}`;
+  console.log("[XK] 同步选课系统学期:", { tabId, xnxq: normalized, url });
+
+  try {
+    await chrome.tabs.update(tabId, { url, active: false });
+    await waitForTabComplete(tabId);
+    const res = await chrome.scripting.executeScript({
+      target: { tabId },
+      func: (expectedXnxq) => {
+        const pageXnxqs = [];
+        const add = value => {
+          const matches = String(value || "").match(/20\d{2}-20\d{2}-[1-3]/g);
+          if (matches) pageXnxqs.push(...matches);
+        };
+        add(location.href);
+        document.querySelectorAll("[href], [action], [value], [data-url], [onclick]").forEach(el => {
+          add(el.getAttribute("href"));
+          add(el.getAttribute("action"));
+          add(el.getAttribute("value"));
+          add(el.getAttribute("data-url"));
+          add(el.getAttribute("onclick"));
+        });
+        return {
+          ok: location.href.includes(`p_xnxq=${expectedXnxq}`) || pageXnxqs.includes(expectedXnxq),
+          href: location.href,
+          title: document.title || "",
+          pageXnxqs: Array.from(new Set(pageXnxqs)).slice(0, 10),
+          textSample: (document.body?.textContent || "").replace(/\s+/g, " ").slice(0, 180),
+        };
+      },
+      args: [normalized]
+    });
+    const result = res[0]?.result || {};
+    if (!result.ok) {
+      console.warn("[XK] 学期同步后页面未确认目标学期:", result);
+    }
+    return { ok: true, ...result };
+  } catch (e) {
+    return { ok: false, error: e.message || String(e) };
+  }
+}
+
+function buildCourseScheduleSearchUrl(xnxq, extraParams = {}) {
+  const normalized = normalizeXnxq(xnxq);
+  const params = new URLSearchParams({
+    m: "kkxxSearch",
+    p_xnxq: normalized,
+    ...extraParams
+  });
+  return `http://zhjwxk.cic.tsinghua.edu.cn/xkBks.vxkBksJxjhBs.do?${params.toString()}`;
+}
+
+function createHiddenTab(url) {
+  return new Promise(resolve => {
+    chrome.tabs.create({ url, active: false }, resolve);
+  });
+}
+
+function closeTabQuietly(tabId) {
+  if (!tabId) return;
+  chrome.tabs.remove(tabId).catch(() => {});
+}
+
+async function submitNativeCourseSearch(tabId, xnxq) {
+  const normalized = normalizeXnxq(xnxq);
+  if (!tabId || !normalized) return { ok: false, error: "缺少查询标签页或学期" };
+
+  const res = await chrome.scripting.executeScript({
+    target: { tabId },
+    func: (targetXnxq) => {
+      const form = document.forms.frm || document.querySelector("form");
+      if (!form) {
+        return {
+          ok: false,
+          error: "页面没有找到查询表单",
+          href: location.href,
+          title: document.title || "",
+          textSample: (document.body?.textContent || "").replace(/\s+/g, " ").slice(0, 180)
+        };
+      }
+
+      const setField = (name, value) => {
+        let el = form.querySelector(`[name="${name}"]`);
+        if (!el) {
+          el = document.createElement("input");
+          el.type = "hidden";
+          el.name = name;
+          form.appendChild(el);
+        }
+        el.value = value;
+      };
+
+      setField("m", "kkxxSearch");
+      setField("page", "1");
+      setField("goPageNumber", "1");
+      setField("p_xnxq", targetXnxq);
+      [
+        "pathContent", "showtitle", "p_kch", "p_kcm", "p_zjjsxm", "p_kkdwnm",
+        "p_kcflm", "p_skxq", "p_skjc", "p_xkwzsm", "p_rxklxm", "p_kctsm",
+        "p_ssnj", "p_bkskyl_ig", "p_yjskyl_ig", "p_sort.p1", "p_sort.p2"
+      ].forEach(name => setField(name, ""));
+      setField("p_sort.asc1", "true");
+      setField("p_sort.asc2", "true");
+
+      const actionUrl = new URL(form.getAttribute("action") || "xkBks.vxkBksJxjhBs.do", location.href);
+      actionUrl.searchParams.set("m", "kkxxSearch");
+      actionUrl.searchParams.set("p_xnxq", targetXnxq);
+      actionUrl.searchParams.set("_", String(Date.now()));
+      form.action = actionUrl.href;
+      form.method = "post";
+
+      const before = {
+        href: location.href,
+        title: document.title || "",
+        action: form.action,
+        method: form.method,
+        tokenPresent: !!form.querySelector('[name="token"]')?.value,
+        pXnxq: form.querySelector('[name="p_xnxq"]')?.value || ""
+      };
+
+      setTimeout(() => {
+        try {
+          if (typeof window.doQuery === "function") {
+            window.doQuery();
+          } else if (typeof form.requestSubmit === "function") {
+            form.requestSubmit();
+          } else {
+            form.submit();
+          }
+        } catch (e) {
+          form.submit();
+        }
+      }, 0);
+
+      return { ok: true, ...before };
+    },
+    args: [normalized]
+  });
+
+  const result = res[0]?.result || { ok: false, error: "没有返回查询表单提交结果" };
+  console.log("[XK] 原生查询提交:", result);
+  if (result.ok) await waitForTabComplete(tabId);
+  return result;
+}
+
+async function getStoredXnxqs() {
+  return new Promise(resolve => {
+    chrome.storage.local.get([
+      "latestXnxq",
+      "activeXnxq",
+      "availableXnxqs",
+      "courseScheduleData",
+      "nextSemesterData",
+      "enrollmentStatsData",
+      "courseScheduleDataByXnxq",
+      "nextSemesterDataByXnxq",
+      "enrollmentStatsDataByXnxq",
+      "selectedCoursesByXnxq",
+      "selectedPreferencePlanByXnxq"
+    ], result => {
+      resolve(uniqueSortedXnxqs([
+        result.latestXnxq,
+        result.activeXnxq,
+        result.courseScheduleData?.xnxq,
+        result.nextSemesterData?.xnxq,
+        result.enrollmentStatsData?.xnxq,
+        ...(result.availableXnxqs || []),
+        ...Object.keys(result.courseScheduleDataByXnxq || {}),
+        ...Object.keys(result.nextSemesterDataByXnxq || {}),
+        ...Object.keys(result.enrollmentStatsDataByXnxq || {}),
+        ...Object.keys(result.selectedCoursesByXnxq || {}),
+        ...Object.keys(result.selectedPreferencePlanByXnxq || {})
+      ]));
+    });
+  });
+}
+
+async function probeCourseScheduleXnxq(tabId, xnxq) {
+  const normalized = normalizeXnxq(xnxq);
+  if (!normalized) return { xnxq, available: false, status: 0, error: "invalid xnxq" };
+
+  const res = await chrome.scripting.executeScript({
+    target: { tabId },
+    func: (probeXnxq) => {
+      return (async () => {
+        const url = "http://zhjwxk.cic.tsinghua.edu.cn/xkBks.vxkBksJxjhBs.do";
+        const body = new URLSearchParams({
+          m: "kkxxSearch",
+          page: "1",
+          p_xnxq: probeXnxq,
+          pathContent: "",
+          showtitle: "",
+          p_kch: "",
+          p_kcm: "",
+          p_zjjsxm: "",
+          p_kkdwnm: "",
+          p_kcflm: "",
+          p_skxq: "",
+          p_skjc: "",
+          p_xkwzsm: "",
+          p_rxklxm: "",
+          p_kctsm: "",
+          p_ssnj: "",
+          p_bkskyl_ig: "",
+          p_yjskyl_ig: "",
+          goPageNumber: "1",
+          "p_sort.p1": "",
+          "p_sort.p2": "",
+          "p_sort.asc1": "true",
+          "p_sort.asc2": "true"
+        }).toString();
+
+        try {
+          const response = await fetch(url, {
+            method: "POST",
+            credentials: "include",
+            headers: { "Content-Type": "application/x-www-form-urlencoded" },
+            body
+          });
+          const html = await response.text();
+          const doc = new DOMParser().parseFromString(html, "text/html");
+          const rowCount = doc.querySelectorAll("table tr.trr2").length;
+          const text = doc.body ? doc.body.textContent.replace(/\s+/g, " ") : "";
+          const countMatch = text.match(/共\s*([\d,]+)\s*条记录/) || text.match(/共\s*([\d,]+)\s*条/);
+          const totalCount = countMatch ? parseInt(countMatch[1].replace(/,/g, ""), 10) : null;
+          return {
+            xnxq: probeXnxq,
+            available: response.status === 200,
+            status: response.status,
+            ok: response.ok,
+            rowCount,
+            totalCount,
+            title: doc.title || "",
+          };
+        } catch (e) {
+          return { xnxq: probeXnxq, available: false, status: 0, error: e.message || String(e) };
+        }
+      })();
+    },
+    args: [normalized]
+  });
+
+  return res[0]?.result || { xnxq: normalized, available: false, status: 0, error: "no probe result" };
+}
+
+async function discoverAvailableXnxqs(preferredTabId) {
+  const xkTab = await getXkTab(preferredTabId);
+  if (!xkTab) {
+    const localXnxqs = await getStoredXnxqs();
+    return {
+      success: false,
+      error: "未找到已登录的选课系统标签页，请先打开并登录 zhjwxk.cic.tsinghua.edu.cn",
+      availableXnxqs: localXnxqs,
+      localXnxqs,
+      probes: []
+    };
+  }
+
+  const start = inferProbeStartXnxq();
+  const probes = [];
+  const available = [];
+  let current = start;
+  let consecutiveMissing = 0;
+  const maxProbeCount = 18;
+
+  for (let i = 0; i < maxProbeCount && consecutiveMissing < 3; i++) {
+    const probe = await probeCourseScheduleXnxq(xkTab.id, current);
+    probes.push(probe);
+    if (probe.available) {
+      available.push(current);
+      consecutiveMissing = 0;
+    } else {
+      consecutiveMissing += 1;
+    }
+    current = nextXnxq(current);
+  }
+
+  const localXnxqs = await getStoredXnxqs();
+  const availableXnxqs = uniqueSortedXnxqs([...available, ...localXnxqs]);
+  const latestXnxq = pickLatestXnxq(availableXnxqs);
+  const currentActiveXnxq = await new Promise(resolve => {
+    chrome.storage.local.get(["activeXnxq"], result => resolve(normalizeXnxq(result.activeXnxq)));
+  });
+  const nextActiveXnxq = currentActiveXnxq || latestXnxq || localXnxqs[localXnxqs.length - 1] || "";
+  await new Promise(resolve => {
+    chrome.storage.local.set({
+      availableXnxqs,
+      availableXnxqProbeResults: probes,
+      availableXnxqCheckedAt: new Date().toISOString(),
+      latestXnxq,
+      latestXnxqSource: "probe",
+      latestXnxqUpdatedAt: new Date().toISOString(),
+      activeXnxq: nextActiveXnxq
+    }, resolve);
+  });
+
+  return {
+    success: true,
+    start,
+    availableXnxqs,
+    probedAvailableXnxqs: uniqueSortedXnxqs(available),
+    localXnxqs,
+    activeXnxq: nextActiveXnxq,
+    probes
+  };
+}
+
 // =======================================================
 // 抓取下学期培养方案推荐课程列表
 // =======================================================
-async function fetchNextSemesterCourses() {
+async function fetchNextSemesterCourses(requestedXnxq) {
   console.log("=== Fetch Next Semester Courses ===");
 
-  const xnxq = await getLatestXnxq();
+  const xnxq = normalizeXnxq(requestedXnxq) || await getActiveXnxq() || await getLatestXnxq();
   const url = `http://zhjwxk.cic.tsinghua.edu.cn/jhBks.vjhBksPyfakcbBs.do?m=showBksZxZdxjxjhXmxqkclist&p_xnxq=${xnxq}`;
 
   // 新开 tab 访问目标页面
@@ -489,10 +891,10 @@ async function fetchNextSemesterCourses() {
 // =======================================================
 // 抓取所有开课信息（多页）
 // =======================================================
-async function fetchAllCourseSchedule(fromTabId, progressTabId) {
+async function fetchAllCourseSchedule(fromTabId, progressTabId, requestedXnxq) {
   console.log("=== Fetch All Course Schedule ===");
 
-  const xnxq = await getLatestXnxq(fromTabId);
+  const xnxq = normalizeXnxq(requestedXnxq) || await getActiveXnxq() || await getLatestXnxq(fromTabId);
   const postUrl = "http://zhjwxk.cic.tsinghua.edu.cn/xkBks.vxkBksJxjhBs.do";
 
   // 发送进度更新给 dashboard
@@ -503,40 +905,45 @@ async function fetchAllCourseSchedule(fromTabId, progressTabId) {
     }).catch(() => {}); // dashboard 可能已关闭，忽略错误
   }
 
-  // 实时查找选课系统的 tab（每次调用都重新查，不缓存）
-  const tabs = await chrome.tabs.query({});
-  const xkTab = tabs.find(t => (t.url || "").includes("zhjwxk.cic.tsinghua.edu.cn") && !(t.url || "").includes("xklogin.do"));
+  const xkTab = await getXkTab(fromTabId, xnxq);
   if (!xkTab) {
     return { success: false, error: "未找到已登录的选课系统，请先手动打开并登录 zhjwxk.cic.tsinghua.edu.cn" };
   }
-  const workerTabId = xkTab.id;
-  console.log("[XK] 使用 tab:", workerTabId, xkTab.url);
+  console.log("[XK] 已登录 tab:", xkTab.id, xkTab.url);
+
+  const mainUrl = `http://zhjwxk.cic.tsinghua.edu.cn/xkBks.vxkBksXkbBs.do?m=main&p_xnxq=${encodeURIComponent(xnxq)}&_=${Date.now()}`;
+  const entryUrl = buildCourseScheduleSearchUrl(xnxq, { page: "1", _: String(Date.now()) });
+  const workerTab = await createHiddenTab(mainUrl);
+  const workerTabId = workerTab.id;
+  console.log("[XK] 使用临时查询 tab:", workerTabId, { mainUrl, entryUrl });
+  await waitForTabComplete(workerTabId);
+  await chrome.tabs.update(workerTabId, { url: entryUrl, active: false });
+  await waitForTabComplete(workerTabId);
 
   // 在新 tab 里用同步 XHR 发 POST
   // 第一页：获取 HTML、token、总页数
-  const firstPageRes = await chrome.scripting.executeScript({
-    target: { tabId: workerTabId },
-    func: (url, xnxq) => {
+  let firstPageRes;
+  try {
+    firstPageRes = await chrome.scripting.executeScript({
+      target: { tabId: workerTabId },
+      func: (url, xnxq) => {
       try {
-        const body = "m=kkxxSearch&page=1&p_xnxq=" + xnxq +
-          "&pathContent=&showtitle=&p_kch=&p_kcm=&p_zjjsxm=&p_kkdwnm=" +
-          "&p_kcflm=&p_skxq=&p_skjc=&p_xkwzsm=&p_rxklxm=&p_kctsm=&p_ssnj=" +
-          "&p_bkskyl_ig=&p_yjskyl_ig=&goPageNumber=1" +
-          "&p_sort.p1=&p_sort.p2=&p_sort.asc1=true&p_sort.asc2=true";
-        const xhr = new XMLHttpRequest();
-        xhr.open("POST", url, false);
-        xhr.setRequestHeader("Content-Type", "application/x-www-form-urlencoded");
-        xhr.withCredentials = true;
-        xhr.send(body);
-        const html = xhr.responseText;
+        // 这里不要再额外 POST 第一页。平台会把上一次 kkxxSearch 查询状态缓存到 session，
+        // 直接 POST 即使带 p_xnxq 也可能返回旧学期。先进入目标学期页面，再解析当前 DOM。
+        const html = document.documentElement.outerHTML || "";
+        const status = 200;
+        const finalUrl = location.href;
+        const currentHtml = html;
+        const initialTokenMatch = currentHtml.match(/name="token"[^>]*value="([^"]+)"/);
+        const initialToken = initialTokenMatch ? initialTokenMatch[1] : "";
         const tokenMatch = html.match(/name="token"[^>]*value="([^"]+)"/);
         const token = tokenMatch ? tokenMatch[1] : "";
-        const endpageMatch = html.match(/href='javascript:turn\((\d+)\);'\s+id="endpage"/);
-        const totalPages = endpageMatch ? parseInt(endpageMatch[1]) : null;
-        const countMatch = html.match(/共\s*([\d,]+)\s*条记录/);
-        const totalCount = countMatch ? parseInt(countMatch[1].replace(/,/g, "")) : null;
         // 在 tab 里直接解析 HTML（background service worker 没有 DOMParser）
         const doc = new DOMParser().parseFromString(html, "text/html");
+        const pageText = doc.body ? doc.body.textContent.replace(/\s+/g, " ") : "";
+        const countMatch = pageText.match(/共\s*([\d,]+)\s*条记录/) || pageText.match(/共\s*([\d,]+)\s*条/);
+        const totalCount = countMatch ? parseInt(countMatch[1].replace(/,/g, ""), 10) : null;
+        const title = doc.title || "";
         const rows = [];
         doc.querySelectorAll("table tr.trr2").forEach(tr => {
           const cells = tr.querySelectorAll("td");
@@ -555,38 +962,100 @@ async function fetchAllCourseSchedule(fromTabId, progressTabId) {
             hasTimeLimit: g(cells[17]), generalGroup: g(cells[18]),
           });
         });
-        return { ok: true, rows, token, totalPages, totalCount };
+        const endpageEl = doc.querySelector("#endpage");
+        const endpageText = [
+          endpageEl?.getAttribute("href"),
+          endpageEl?.getAttribute("onclick"),
+          endpageEl?.textContent
+        ].filter(Boolean).join(" ");
+        const paginationText = [endpageText, html, pageText].filter(Boolean).join(" ");
+        const turnPages = Array.from(paginationText.matchAll(/turn\s*\(\s*(\d+)\s*\)/g))
+          .map(m => parseInt(m[1], 10))
+          .filter(n => Number.isFinite(n) && n > 0);
+        const endpageMatch = endpageText.match(/turn\s*\(\s*(\d+)\s*\)/);
+        const textPageMatch = pageText.match(/第\s*\d+\s*页\s*[\/／]\s*共\s*(\d+)\s*页/)
+          || pageText.match(/共\s*(\d+)\s*页/);
+        let totalPages = endpageMatch ? parseInt(endpageMatch[1], 10) : null;
+        if (!totalPages && textPageMatch) totalPages = parseInt(textPageMatch[1], 10);
+        if (!totalPages && turnPages.length) totalPages = Math.max(...turnPages);
+        if (!totalPages && totalCount && rows.length) totalPages = Math.ceil(totalCount / rows.length);
+        if (!totalPages && totalCount === 0) totalPages = 1;
+        if (!totalPages && rows.length) totalPages = 1;
+        const sampleRows = rows.slice(0, 5).map(r => ({
+          courseId: r.courseId,
+          courseSeq: r.courseSeq,
+          courseName: r.courseName,
+          teacher: r.teacher,
+          schedule: r.schedule
+        }));
+        const htmlSample = pageText.slice(0, 220);
+        return {
+          ok: status >= 200 && status < 300,
+          status,
+          finalUrl,
+          locationHref: location.href,
+          bodyXnxq: xnxq,
+          initialTokenPresent: !!initialToken,
+          source: "initial-dom",
+          rows,
+          sampleRows,
+          token,
+          totalPages,
+          totalCount,
+          title,
+          htmlSample,
+          htmlLength: html.length
+        };
       } catch (e) {
         return { ok: false, error: e.message };
       }
-    },
-    args: [postUrl, xnxq]
-  });
+      },
+      args: [buildCourseScheduleSearchUrl(xnxq, { _: String(Date.now()) }), xnxq]
+    });
 
-  const firstPage = firstPageRes[0] && firstPageRes[0].result;
-  if (!firstPage || !firstPage.ok) {
-    return { success: false, error: (firstPage && firstPage.error) || "第一页请求失败" };
-  }
-  if (!firstPage.totalPages) {
-    return { success: false, error: "无法获取总页数，请确认已登录选课系统" };
-  }
+    const firstPage = firstPageRes[0] && firstPageRes[0].result;
+    console.log("[XK] first page parsed:", {
+      xnxq,
+      bodyXnxq: firstPage?.bodyXnxq,
+      status: firstPage?.status,
+      totalPages: firstPage?.totalPages,
+      totalCount: firstPage?.totalCount,
+      rows: firstPage?.rows?.length,
+      title: firstPage?.title,
+      source: firstPage?.source,
+      initialTokenPresent: firstPage?.initialTokenPresent,
+      locationHref: firstPage?.locationHref,
+      finalUrl: firstPage?.finalUrl,
+      sampleRows: firstPage?.sampleRows,
+      htmlSample: firstPage?.htmlSample
+    });
+    if (!firstPage || !firstPage.ok) {
+      const details = firstPage?.htmlSample ? `，摘要：${firstPage.htmlSample}` : "";
+      return { success: false, error: (firstPage && firstPage.error) || `第一页请求失败：${xnxq}，HTTP ${firstPage?.status || "unknown"}${details}` };
+    }
+    if (!firstPage.totalPages) {
+      return {
+        success: false,
+        error: `无法获取总页数：${xnxq}。HTTP ${firstPage.status || "unknown"}，标题：${firstPage.title || "无"}，第一页课程 ${firstPage.rows?.length || 0} 条，HTML ${firstPage.htmlLength || 0} 字符，摘要：${firstPage.htmlSample || ""}`
+      };
+    }
 
-  const totalPages = firstPage.totalPages;
-  const totalCount = firstPage.totalCount;
-  let currentToken = firstPage.token;
-  console.log("[XK] 共 " + totalPages + " 页，" + totalCount + " 条记录");
-  sendProgress(1, totalPages, "running");
+    const totalPages = firstPage.totalPages;
+    const totalCount = firstPage.totalCount;
+    let currentToken = firstPage.token;
+    console.log("[XK] 共 " + totalPages + " 页，" + totalCount + " 条记录");
+    sendProgress(1, totalPages, "running");
 
-  const allRows = [];
-  allRows.push(...firstPage.rows);
+    const allRows = [];
+    allRows.push(...firstPage.rows);
 
-  // 逐页同步 XHR，每页从响应里取新 token
-  for (let page = 2; page <= totalPages; page++) {
-    sendProgress(page, totalPages, "running");
+    // 逐页同步 XHR，每页从响应里取新 token
+    for (let page = 2; page <= totalPages; page++) {
+      sendProgress(page, totalPages, "running");
 
-    const pageRes = await chrome.scripting.executeScript({
-      target: { tabId: workerTabId },
-      func: (url, xnxq, page, token) => {
+      const pageRes = await chrome.scripting.executeScript({
+        target: { tabId: workerTabId },
+        func: (url, xnxq, page, token) => {
         try {
           const body = "m=kkxxSearch&page=" + page + "&token=" + token +
             "&p_xnxq=" + xnxq +
@@ -626,46 +1095,61 @@ async function fetchAllCourseSchedule(fromTabId, progressTabId) {
         } catch (e) {
           return { ok: false, error: e.message };
         }
-      },
-      args: [postUrl, xnxq, page, currentToken]
-    });
+        },
+        args: [buildCourseScheduleSearchUrl(xnxq, { page: String(page), _: String(Date.now()) }), xnxq, page, currentToken]
+      });
 
-    const pageResult = pageRes[0] && pageRes[0].result;
-    if (!pageResult || !pageResult.ok) {
-      console.warn("[XK] 第 " + page + " 页失败，跳过");
-      continue;
+      const pageResult = pageRes[0] && pageRes[0].result;
+      if (!pageResult || !pageResult.ok) {
+        console.warn("[XK] 第 " + page + " 页失败，跳过");
+        continue;
+      }
+
+      currentToken = pageResult.nextToken;
+      allRows.push(...pageResult.rows);
+      console.log("[XK] 第 " + page + "/" + totalPages + " 页，本页 " + pageResult.rows.length + " 条");
     }
 
-    currentToken = pageResult.nextToken;
-    allRows.push(...pageResult.rows);
-    console.log("[XK] 第 " + page + "/" + totalPages + " 页，本页 " + pageResult.rows.length + " 条");
+    sendProgress(totalPages, totalPages, "done");
+    console.log("[XK] 全部完成，共 " + allRows.length + " 条", {
+      xnxq,
+      sampleRows: allRows.slice(0, 5).map(r => ({
+        courseId: r.courseId,
+        courseSeq: r.courseSeq,
+        courseName: r.courseName,
+        teacher: r.teacher,
+        schedule: r.schedule
+      }))
+    });
+
+    return {
+      success: true,
+      total: allRows.length,
+      data: allRows,
+      xnxq,
+      fetchTime: new Date().toISOString()
+    };
+  } finally {
+    closeTabQuietly(workerTabId);
   }
-
-  sendProgress(totalPages, totalPages, "done");
-  console.log("[XK] 全部完成，共 " + allRows.length + " 条");
-
-  return {
-    success: true,
-    total: allRows.length,
-    data: allRows,
-    xnxq,
-    fetchTime: new Date().toISOString()
-  };
 }
 
 // =======================================================
 // 抓取选课志愿人数统计（BR + 体育）
 // =======================================================
-async function fetchEnrollmentStats(fromTabId) {
+async function fetchEnrollmentStats(fromTabId, requestedXnxq) {
   console.log("=== Fetch Enrollment Stats ===");
 
   try {
     sendEnrollmentProgress({ source: "BR", current: 0, total: 0, overallCurrent: 0, overallTotal: 0, status: "start" });
-    const xnxq = await getLatestXnxq(fromTabId);
-    const tabs = await chrome.tabs.query({});
-    const xkTab = tabs.find(t => (t.url || "").includes("zhjwxk.cic.tsinghua.edu.cn") && !(t.url || "").includes("xklogin.do"));
+    const xnxq = normalizeXnxq(requestedXnxq) || await getActiveXnxq() || await getLatestXnxq(fromTabId);
+    const xkTab = await getXkTab(fromTabId, xnxq);
     if (!xkTab) {
       return { success: false, error: "未找到已登录的选课系统，请先手动打开并登录 zhjwxk.cic.tsinghua.edu.cn" };
+    }
+    const syncResult = await ensureXkTabXnxq(xkTab.id, xnxq);
+    if (!syncResult.ok) {
+      return { success: false, error: `无法切换选课系统到 ${xnxq}：${syncResult.error || "未知错误"}` };
     }
 
     let knownTotalPages = 0;
@@ -697,7 +1181,7 @@ async function fetchEnrollmentStats(fromTabId) {
       Ty: await fetchEnrollmentSource(xkTab.id, xnxq, "Ty", onSourceProgress)
     };
 
-    const scheduleData = await getCourseScheduleData();
+    const scheduleData = await getCourseScheduleData(xnxq);
     const brJoined = joinEnrollmentRows(stats.BR.rows, scheduleData);
     const tyJoined = joinEnrollmentRows(stats.Ty.rows, scheduleData);
 
@@ -725,7 +1209,7 @@ async function fetchEnrollmentStats(fromTabId) {
       }
     };
 
-    await setLocalStorage({ enrollmentStatsData: result });
+    await saveEnrollmentStatsForXnxq(result);
     sendEnrollmentProgress({
       source: "all",
       current: knownTotalPages,
@@ -905,10 +1389,16 @@ async function fetchEnrollmentPage(tabId, xnxq, source, page) {
   return res[0]?.result || { ok: false, error: `${source} 第 ${page} 页没有返回结果` };
 }
 
-function getCourseScheduleData() {
+function getCourseScheduleData(xnxq) {
   return new Promise(resolve => {
-    chrome.storage.local.get(["courseScheduleData"], result => {
-      resolve(result.courseScheduleData || null);
+    chrome.storage.local.get(["courseScheduleData", "courseScheduleDataByXnxq"], result => {
+      const normalized = normalizeXnxq(xnxq);
+      if (normalized && result.courseScheduleDataByXnxq?.[normalized]) {
+        resolve(result.courseScheduleDataByXnxq[normalized]);
+        return;
+      }
+      const legacy = result.courseScheduleData || null;
+      resolve(!normalized || legacy?.xnxq === normalized ? legacy : null);
     });
   });
 }
@@ -916,6 +1406,30 @@ function getCourseScheduleData() {
 function setLocalStorage(data) {
   return new Promise(resolve => {
     chrome.storage.local.set(data, resolve);
+  });
+}
+
+function saveEnrollmentStatsForXnxq(result) {
+  const xnxq = normalizeXnxq(result?.xnxq);
+  if (!xnxq) return setLocalStorage({ enrollmentStatsData: result });
+  return new Promise(resolve => {
+    chrome.storage.local.get(["enrollmentStatsDataByXnxq", "availableXnxqs"], state => {
+      const byXnxq = {
+        ...(state.enrollmentStatsDataByXnxq || {}),
+        [xnxq]: result
+      };
+      const keep = new Set(uniqueSortedXnxqs(Object.keys(byXnxq)).slice(-2));
+      const pruned = {};
+      Object.entries(byXnxq).forEach(([key, value]) => {
+        if (keep.has(normalizeXnxq(key))) pruned[normalizeXnxq(key)] = value;
+      });
+      chrome.storage.local.set({
+        activeXnxq: xnxq,
+        enrollmentStatsData: result,
+        enrollmentStatsDataByXnxq: pruned,
+        availableXnxqs: uniqueSortedXnxqs([...(state.availableXnxqs || []), xnxq])
+      }, resolve);
+    });
   });
 }
 

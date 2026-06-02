@@ -28,6 +28,7 @@ class SchedulePlanner {
     this.scheduleData = null;
     this.nextSemesterData = null;
     this.enrollmentStatsData = null;
+    this.activeXnxq = '';
     this.enrollmentStatsMap = new Map();
     this.selectedKeys = new Set();   // "courseId::courseSeq"
     this.selectedCourses = new Map();// key -> courseObj
@@ -68,20 +69,84 @@ class SchedulePlanner {
   // ==================== 数据加载 ====================
   async loadData() {
     return new Promise(resolve => {
-      chrome.storage.local.get(['courseScheduleData', 'nextSemesterData', 'selectedCourses', 'selectedPreferencePlan', 'selectedPreferenceOrder', 'preferenceOrder', 'enrollmentStatsData'], r => {
-        this.scheduleData = r.courseScheduleData || null;
-        this.nextSemesterData = r.nextSemesterData || null;
-        this.enrollmentStatsData = r.enrollmentStatsData || null;
-        this.preferencePlan = this._normalizePreferencePlan(r.selectedPreferencePlan, r.selectedPreferenceOrder || r.preferenceOrder);
+      chrome.storage.local.get([
+        'activeXnxq',
+        'courseScheduleData',
+        'nextSemesterData',
+        'selectedCourses',
+        'selectedPreferencePlan',
+        'selectedPreferenceOrder',
+        'preferenceOrder',
+        'enrollmentStatsData',
+        'courseScheduleDataByXnxq',
+        'nextSemesterDataByXnxq',
+        'enrollmentStatsDataByXnxq',
+        'selectedCoursesByXnxq',
+        'selectedPreferencePlanByXnxq',
+        'selectedPreferenceOrderByXnxq'
+      ], r => {
+        const active = this._normalizeXnxq(r.activeXnxq)
+          || this._normalizeXnxq(r.courseScheduleData?.xnxq)
+          || this._latestXnxq(Object.keys(r.courseScheduleDataByXnxq || {}))
+          || '';
+        this.activeXnxq = active;
+        this.scheduleData = r.courseScheduleDataByXnxq?.[active] || (r.courseScheduleData?.xnxq === active ? r.courseScheduleData : null);
+        this.nextSemesterData = r.nextSemesterDataByXnxq?.[active] || (r.nextSemesterData?.xnxq === active ? r.nextSemesterData : null);
+        this.enrollmentStatsData = r.enrollmentStatsDataByXnxq?.[active] || (r.enrollmentStatsData?.xnxq === active ? r.enrollmentStatsData : null);
+        console.log('[CourseHelper][SchedulePlanner.loadData]', {
+          active,
+          legacyXnxq: r.courseScheduleData?.xnxq,
+          bucketKeys: Object.keys(r.courseScheduleDataByXnxq || {}),
+          loadedXnxq: this.scheduleData?.xnxq,
+          loadedTotal: this.scheduleData?.total || this.scheduleData?.data?.length || 0,
+          loadedSample: (this.scheduleData?.data || []).slice(0, 5).map(c => ({
+            courseId: c.courseId,
+            courseSeq: c.courseSeq,
+            courseName: c.courseName,
+            teacher: c.teacher,
+            schedule: c.schedule
+          }))
+        });
+        const hasSelectedBuckets = !!r.selectedCoursesByXnxq && Object.keys(r.selectedCoursesByXnxq).length > 0;
+        const hasPreferenceBuckets = !!r.selectedPreferencePlanByXnxq && Object.keys(r.selectedPreferencePlanByXnxq).length > 0;
+        const hasPreferenceOrderBuckets = !!r.selectedPreferenceOrderByXnxq && Object.keys(r.selectedPreferenceOrderByXnxq).length > 0;
+        const selectedForXnxq = hasSelectedBuckets ? (r.selectedCoursesByXnxq?.[active] || []) : (r.selectedCourses || []);
+        const planForXnxq = hasPreferenceBuckets ? (r.selectedPreferencePlanByXnxq?.[active] || {}) : r.selectedPreferencePlan;
+        const orderForXnxq = hasPreferenceOrderBuckets ? (r.selectedPreferenceOrderByXnxq?.[active] || null) : (r.selectedPreferenceOrder || r.preferenceOrder);
+        this.preferencePlan = this._normalizePreferencePlan(planForXnxq, orderForXnxq);
+        this.selectedKeys = new Set(selectedForXnxq || []);
+        this.selectedCourses = new Map();
         this._buildEnrollmentStatsMap();
-        if (r.selectedCourses) {
-          this.selectedKeys = new Set(r.selectedCourses);
-          this._rebuildSelected();
-        }
+        this._rebuildSelected();
         this._syncPreferencePlan();
         resolve();
       });
     });
+  }
+
+  _normalizeXnxq(value) {
+    const match = String(value || '').match(/(20\d{2})-(20\d{2})-([1-3])/);
+    if (!match) return '';
+    const start = parseInt(match[1], 10);
+    const end = parseInt(match[2], 10);
+    if (end !== start + 1) return '';
+    return `${match[1]}-${match[2]}-${match[3]}`;
+  }
+
+  _compareXnxq(a, b) {
+    const left = this._normalizeXnxq(a).split('-').map(Number);
+    const right = this._normalizeXnxq(b).split('-').map(Number);
+    if (left.length !== 3 && right.length !== 3) return 0;
+    if (left.length !== 3) return -1;
+    if (right.length !== 3) return 1;
+    if (left[0] !== right[0]) return left[0] - right[0];
+    return left[2] - right[2];
+  }
+
+  _latestXnxq(values) {
+    return Array.from(new Set((values || []).map(v => this._normalizeXnxq(v)).filter(Boolean)))
+      .sort((a, b) => this._compareXnxq(a, b))
+      .pop() || '';
   }
 
   _rebuildSelected() {
@@ -95,9 +160,30 @@ class SchedulePlanner {
 
   _save() {
     this._syncPreferencePlan();
-    chrome.storage.local.set({
-      selectedCourses: Array.from(this.selectedKeys),
-      selectedPreferencePlan: this.preferencePlan,
+    const active = this._normalizeXnxq(this.activeXnxq || this.scheduleData?.xnxq);
+    const selectedCourses = Array.from(this.selectedKeys);
+    if (!active) {
+      chrome.storage.local.set({
+        selectedCourses,
+        selectedPreferencePlan: this.preferencePlan,
+      });
+      return;
+    }
+
+    chrome.storage.local.get(['selectedCoursesByXnxq', 'selectedPreferencePlanByXnxq'], r => {
+      chrome.storage.local.set({
+        activeXnxq: active,
+        selectedCourses,
+        selectedPreferencePlan: this.preferencePlan,
+        selectedCoursesByXnxq: {
+          ...(r.selectedCoursesByXnxq || {}),
+          [active]: selectedCourses
+        },
+        selectedPreferencePlanByXnxq: {
+          ...(r.selectedPreferencePlanByXnxq || {}),
+          [active]: this.preferencePlan
+        }
+      });
     });
   }
 
@@ -560,8 +646,8 @@ class SchedulePlanner {
 
     const noticeHTML = (!hasSchedule || !hasNext) ? `
       <div class="sp-notice">
-        ${!hasSchedule ? '⚠️ 缺少开课数据，请点击顶部「抓取开课信息」<br>' : ''}
-        ${!hasNext ? '⚠️ 缺少推荐课单，请点击顶部「下学期推荐课」' : ''}
+        ${!hasSchedule ? '⚠️ 当前学期缺少开课数据，请在顶部「操作」菜单中点击「抓取开课信息」<br>' : ''}
+        ${!hasNext ? '⚠️ 当前学期缺少推荐课单，请在顶部「操作」菜单中点击「抓取推荐课单」' : ''}
       </div>` : '';
 
     const viewTabsHTML = `
@@ -595,7 +681,7 @@ class SchedulePlanner {
 
     return `
       <div class="sp-panel-header">
-        <div class="sp-panel-title">课程选择</div>
+        <div class="sp-panel-title">课程选择${this.activeXnxq ? ` · ${this.activeXnxq}` : ''}</div>
         ${noticeHTML}
         ${viewTabsHTML}
         ${controlHTML}
